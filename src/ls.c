@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <pwd.h>
 #include <grp.h>
+#include <time.h>
 
 #include "ls.h"
 
@@ -14,85 +15,83 @@
 #define BAD_ARGS_ERROR 2
 #define FILE_READ_ERROR 3
 
+#define TIME_BUFF_SIZE 13
+#define PERMISSION_BUFF_SIZE 11
+
 const char *bin_name(const char *);
 int statat(const char *, const char *, struct stat *);
-void print_permission(const mode_t);
+void format_permission(const mode_t, char *);
 long exp_ten(int);
+void format_time(time_t, char *);
+int read_data_width(data_width_t *, const char *);
+int print_info(const char *);
 
 int main(int argc, char const *argv[])
 {
-    int return_flag = 0;
-    DIR *dir;
-    struct dirent *file;
-    struct stat stat_s;
-    data_width_t data_width = { .hard_links = 0 };
-    int number_of_hard_links;
-    int unsigned temp;
-    size_t string_len;
+    const char *item_path;
+    int err;
 
-    if (argc != 2) {
+    if (argc < 2) {
         printf("Usage: %s file/dir\n", bin_name(*argv));
         exit(BAD_ARGS_ERROR);
     }
 
-    if ((stat(*(argv + 1), &stat_s)) == -1) {
+    for (int i = 1; i < argc; i++) {
+        item_path = *(argv + i);
+        if ((err = print_info(item_path)) != 0) {
+            exit(err);
+        }
+        putchar('\n');
+    }
+
+}
+
+int print_info(const char *item_path) {
+    int return_flag = 0;
+    DIR *dir;
+    struct dirent *file;
+    struct stat stat_s;
+    data_width_t data_width;
+    char time_buff[TIME_BUFF_SIZE];
+    char permissions[PERMISSION_BUFF_SIZE];
+
+    if ((stat(item_path, &stat_s)) == -1) {
         perror("Couldn't open selected dir");
         exit(BAD_ARGS_ERROR);
     }
 
     if (S_ISDIR(stat_s.st_mode)) {
-        if ((dir = opendir(*(argv + 1))) == NULL) {
+        if (read_data_width(&data_width, item_path) != 0) {
+            perror("Couldn't open selected directory");
+        }
+
+        if ((dir = opendir(item_path)) == NULL) {
             perror("Couldn't open selected directory");
             return DIR_READ_ERROR;
         }
 
-        while ((file = readdir(dir)) != NULL) {
-            temp = 0;
-            if ((statat(*(argv + 1), file->d_name, &stat_s)) != 0) {
-                break;
-            }
-
-            number_of_hard_links = stat_s.st_nlink;
-            while (number_of_hard_links / exp_ten(temp++));
-
-            if (temp > data_width.hard_links) {
-                data_width.hard_links = temp;
-            }
-
-            string_len = strlen(getpwuid(stat_s.st_uid)->pw_name);
-            
-            if (string_len > data_width.username_len) {
-                data_width.username_len = string_len;
-            }
-
-            string_len = strlen(getgrgid(stat_s.st_gid)->gr_name);
-            
-            if (string_len > data_width.groupname_len) {
-                data_width.groupname_len = string_len;
-            }
-        }
-
-        rewinddir(dir);
-        printf("max len: %li\n", data_width.hard_links);
+        printf("total %i\n", (int)((data_width.total_size + 512 - 1) / 512)); //incorrect?
         errno = 0;
         while ((file = readdir(dir)) != NULL) {
-            if ((statat(*(argv + 1), file->d_name, &stat_s)) != 0) {
+            if ((statat(item_path, file->d_name, &stat_s)) != 0) {
                 break;
             }
-            print_permission(stat_s.st_mode);
-            putchar(' ');
 
-            printf("%*lu %*s %-*s %*lu %lu %lu %s\n",
+            format_permission(stat_s.st_mode, permissions);
+            format_time(stat_s.st_mtime, time_buff);
+
+            printf("%s %*lu %*s %-*s %*lu %s %s\n",
+                permissions,
                 (int)data_width.hard_links, /* number of links width */
                 stat_s.st_nlink, /* number of links */
                 (int)data_width.username_len,
                 getpwuid(stat_s.st_uid)->pw_name,   /* owner id */
                 (int)data_width.groupname_len,
                 getgrgid(stat_s.st_gid)->gr_name,   /* group id */
-                5, stat_s.st_size,  /* byte size */
-                stat_s.st_mtime, /* modification time */
-                file->d_ino,     /* inode number */
-                file->d_name     /* file name */
+                (int)data_width.bytes_len,
+                stat_s.st_size,  /* byte size */
+                time_buff,
+                file->d_name
             );
 
             errno = 0;
@@ -105,23 +104,28 @@ int main(int argc, char const *argv[])
 
         closedir(dir);
     } else if (S_ISREG(stat_s.st_mode)) {
-        if ((stat(*(argv + 1), &stat_s)) != 0) {
+        if ((stat(item_path, &stat_s)) != 0) {
             perror("Error reading file");
             return_flag = FILE_READ_ERROR;
         }
 
-        print_permission(stat_s.st_mode);
-        putchar(' ');
+        format_permission(stat_s.st_mode, permissions);
+        format_time(stat_s.st_mtime, time_buff);
 
-        printf("%lu %i %i %*lu %lu\n",
+        printf("%s %*lu %*s %-*s %*lu %s %s\n",
+            permissions,
+            (int)data_width.hard_links, /* number of links width */
             stat_s.st_nlink, /* number of links */
-            stat_s.st_uid,   /* owner id */
-            stat_s.st_gid,   /* group id */
-            5, stat_s.st_size,  /* byte size */
-            stat_s.st_mtime /* modification time */
+            (int)data_width.username_len,
+            getpwuid(stat_s.st_uid)->pw_name,   /* owner id */
+            (int)data_width.groupname_len,
+            getgrgid(stat_s.st_gid)->gr_name,   /* group id */
+            (int)data_width.bytes_len,
+            stat_s.st_size,  /* byte size */
+            time_buff,
+            item_path
         );
     }
-
     return return_flag;
 }
 
@@ -162,64 +166,66 @@ int statat(const char *dir, const char *location, struct stat *stat_s) {
     return return_flag;
 }
 
-void print_permission(const mode_t mode) {
+void format_permission(const mode_t mode, char *permissions) {
     if (S_ISLNK(mode)) {
-        putchar('l');
+        permissions[0] = 'l';
     }
     else if (S_ISDIR(mode)) {
-        putchar('d');
+        permissions[0] = 'd';
     }
     else if (S_ISFIFO(mode)) {
-        putchar('p');
+        permissions[0] = 'p';
     }
     else if (S_ISBLK(mode)) {
-        putchar('b');
+        permissions[0] = 'b';
     }
     else if (S_ISCHR(mode)) {
-        putchar('c');
+        permissions[0] = 'c';
     }
-    else if (__S_IFSOCK & mode) {
-        putchar('s');
+    else if (S_ISREG(mode)) {
+        permissions[0] = '-';
     }
     else {
-        putchar('-');
+        permissions[0] = 's';
     }
 
-    putchar(S_IRUSR & mode ? 'r' : '-');
-    putchar(S_IWUSR & mode ? 'w' : '-');
+    permissions[1] = S_IRUSR & mode ? 'r' : '-';
+    permissions[2] = S_IWUSR & mode ? 'w' : '-';
     if (S_ISUID & mode) {
-        putchar((S_IXUSR & mode) ? 's' : 'S');
+        permissions[3] = (S_IXUSR & mode) ? 's' : 'S';
     }
     else if (S_IXUSR & mode) {
-        putchar('x');
+        permissions[3] = 'x';
     }
     else {
-        putchar('-');
+        permissions[3] = '-';
     }
 
-    putchar(S_IRGRP & mode ? 'r' : '-');
-    putchar(S_IWGRP & mode ? 'w' : '-');
+    permissions[4] = S_IRGRP & mode ? 'r' : '-';
+    permissions[5] = S_IWGRP & mode ? 'w' : '-';
     if (S_ISGID & mode) {
-        putchar((S_IXGRP & mode) ? 's' : 'S');
+        permissions[6] = (S_IXGRP & mode) ? 's' : 'S';
     }
     else if (S_IXGRP & mode) {
-        putchar('x');
+        permissions[6] = 'x';
     }
     else {
-        putchar('-');
+        permissions[6] = '-';
     }
 
-    putchar(S_IROTH & mode ? 'r' : '-');
-    putchar(S_IWOTH & mode ? 'w' : '-');
+    permissions[7] = S_IROTH & mode ? 'r' : '-';
+    permissions[8] = S_IWOTH & mode ? 'w' : '-';
     if (__S_ISVTX & mode) {
-        putchar((S_IXOTH & mode) ? 't' : 'T');
+        permissions[9] = (S_IXOTH & mode) ? 't' : 'T';
     }
     else if (S_IXOTH & mode) {
-        putchar('x');
+        permissions[9] = 'x';
     }
     else {
-        putchar('-');
+        permissions[9] = '-';
     }
+
+    permissions[10] = '\0';
 }
 
 long exp_ten(int n) {
@@ -228,4 +234,72 @@ long exp_ten(int n) {
         result *= 10;
     }
     return result;
+}
+
+void format_time(time_t time_epoch, char *time_buff) {
+    struct tm time_s; 
+
+    time_s = *localtime(&time_epoch);
+    strftime(time_buff, TIME_BUFF_SIZE, "%b %d %k:%M", &time_s);
+}
+
+int read_data_width(data_width_t *data_width, const char *dir_path) {
+    DIR *dir;
+    struct dirent *file;
+    struct stat stat_s;
+    int number_of_hard_links;
+    int number_of_bytes;
+    int unsigned temp;
+    size_t string_len;
+
+    data_width->hard_links = 1;
+    data_width->bytes_len = 1;
+    data_width->username_len = 1;
+    data_width->groupname_len = 1;
+    data_width->total_size = 0;
+
+    if ((dir = opendir(dir_path)) == NULL) {
+        return DIR_READ_ERROR;
+    }
+
+    while ((file = readdir(dir)) != NULL) {
+        temp = 0;
+        if ((statat(dir_path, file->d_name, &stat_s)) != 0) {
+            break;
+        }
+
+        number_of_hard_links = stat_s.st_nlink;
+        while (number_of_hard_links / exp_ten(temp)) {
+            temp++;
+        }
+
+        if (temp > data_width->hard_links) {
+            data_width->hard_links = temp;
+        }
+
+        string_len = strlen(getpwuid(stat_s.st_uid)->pw_name);
+        
+        if (string_len > data_width->username_len) {
+            data_width->username_len = string_len;
+        }
+
+        string_len = strlen(getgrgid(stat_s.st_gid)->gr_name);
+        
+        if (string_len > data_width->groupname_len) {
+            data_width->groupname_len = string_len;
+        }
+
+        number_of_bytes = stat_s.st_size;
+        data_width->total_size += number_of_bytes;
+        temp = 0;
+        while (number_of_bytes / exp_ten(temp)) {
+            temp++;
+        }
+
+        if (temp > data_width->bytes_len) {
+            data_width->bytes_len = temp;
+        }
+    }
+
+    return 0;
 }
