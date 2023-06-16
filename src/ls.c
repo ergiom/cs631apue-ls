@@ -8,6 +8,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <time.h>
+#include <getopt.h>
 
 #include "ls.h"
 
@@ -18,6 +19,8 @@
 #define TIME_BUFF_SIZE 13
 #define PERMISSION_BUFF_SIZE 11
 
+#define OPTS "AacdFfhiklnqRrSstuw"
+
 const char *bin_name(const char *);
 int statat(const char *, const char *, struct stat *);
 void format_permission(const mode_t, char *);
@@ -26,24 +29,133 @@ void format_time(time_t, char *);
 int read_data_width(data_width_t *, const char *);
 int print_info(const char *);
 
-int main(int argc, char const *argv[])
+enum {
+    ALL,
+    NO_REL,
+    NO_DOTS
+    } filter = NO_DOTS;         /* Aa */
+enum {
+    STATUS,
+    MODIFICATION,
+    ACCESS
+    } time_disp = MODIFICATION; /* cu */
+enum {
+    REDIRECT,
+    NO_REDIRECT
+    } redirect = REDIRECT;      /* d */
+enum {
+    VERBOSE,
+    STANDARD
+    } verbose_types = STANDARD; /* F */
+enum {
+    ALPHABETICAL,
+    SIZE,
+    TIME_MOD,
+    NONE
+    } sorted = ALPHABETICAL;    /* fSt */
+enum {
+    VARIABLE,
+    KBYTES,
+    BYTES
+    } size = BYTES;             /* hk */
+enum {
+    SHOW,
+    HIDE
+    } inode = HIDE;             /* i */
+enum {
+    LONG,
+    NUMERIC,
+    SHORT
+    } verbosity = SHORT;        /* ln */
+enum {
+    BLOCKS,
+    NO_BLOCKS
+    } blocks = NO_BLOCKS;       /* s */
+enum {
+    RAW,
+    PRINT
+    } non_printable = PRINT;    /* qw */
+enum {
+    RECURSIVE,
+    FLAT
+    } recursive = FLAT;         /* R */
+enum {
+    REVERSE,
+    NORMAL
+    } reverse = NORMAL;         /* r */
+
+int main(int argc, char *argv[])
 {
     const char *item_path;
     int err;
+    char opt;
 
-    if (argc < 2) {
-        printf("Usage: %s file/dir\n", bin_name(*argv));
-        exit(BAD_ARGS_ERROR);
+    //default set for system state:
+        // if user == root -> filter=NO_REL
+        // else filter=NO_DOTS
+
+        // if is terminal -> non_printable=HIDE
+        // else non_printable=SHOW
+    //end
+
+    while ((opt = getopt(argc, argv, OPTS)) != -1) {
+        switch (opt) {
+            case 'A':
+                filter = NO_REL; break;
+            case 'a':
+                filter = ALL; break;
+            case 'c':
+                time_disp = STATUS; break;
+            case 'd':
+                redirect = NO_REDIRECT; break;
+            case 'F':
+                verbose_types = VERBOSE; break;
+            case 'f':
+                sorted = NONE; break;
+            case 'h':
+                size = VARIABLE; break;
+            case 'i':
+                inode = SHOW; break;
+            case 'k':
+                size = KBYTES; break;
+            case 'l':
+                verbosity = LONG; break;
+            case 'n':
+                verbosity = NUMERIC; break;
+            case 'q':
+                non_printable = RAW; break;
+            case 'R':
+                recursive = RECURSIVE; break;
+            case 'r':
+                reverse = NORMAL; break;
+            case 'S':
+                sorted = SIZE; break;
+            case 's':
+                blocks = BLOCKS; break;
+            case 't':
+                sorted = TIME_MOD; break;
+            case 'u':
+                time_disp = ACCESS; break;
+            case 'w':
+                non_printable = RAW; break;
+        }
     }
 
-    for (int i = 1; i < argc; i++) {
-        item_path = *(argv + i);
-        if ((err = print_info(item_path)) != 0) {
+    if (argc - optind < 1) {
+        if ((err = print_info(".")) != 0) {
             exit(err);
         }
         putchar('\n');
     }
-
+    else {
+        for (int i = optind; i < argc; i++) {
+            item_path = *(argv + i);
+            if ((err = print_info(item_path)) != 0) {
+                exit(err);
+            }
+            putchar('\n');
+        }
+    }
 }
 
 int print_info(const char *item_path) {
